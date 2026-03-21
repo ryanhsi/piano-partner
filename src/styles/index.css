@@ -16,8 +16,10 @@
   --color-secondary-light:#FFE675;
   --color-secondary-dark: #F0C000;
 
-  --color-accent-green:   #6BCB77;  /* fresh green */
-  --color-accent-blue:    #4D96FF;  /* sky blue */
+  --color-accent-green:      #6BCB77;  /* fresh green */
+  --color-accent-green-dark: #4CAF57;
+  --color-accent-blue:       #4D96FF;  /* sky blue */
+  --color-accent-blue-dark:  #2979E6;
   --color-accent-purple:  #C77DFF;  /* playful purple */
   --color-accent-orange:  #FF9A3C;  /* warm orange */
 
@@ -240,13 +242,13 @@ input, textarea, select {
 .btn-success {
   background-color: var(--color-accent-green);
   color: var(--color-text-on-accent);
-  box-shadow: 0 4px 0px #4CAF57;
+  box-shadow: 0 4px 0px var(--color-accent-green-dark);
 }
 
 .btn-info {
   background-color: var(--color-accent-blue);
   color: var(--color-text-on-accent);
-  box-shadow: 0 4px 0px #2979E6;
+  box-shadow: 0 4px 0px var(--color-accent-blue-dark);
 }
 
 /* Button Sizes */
