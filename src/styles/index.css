@@ -364,6 +364,84 @@ input, textarea, select {
 /* -----------------------------------------------------------------------------
    Playful Animations
    ----------------------------------------------------------------------------- */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%       { transform: translateX(-8px); }
+  40%       { transform: translateX(8px); }
+  60%       { transform: translateX(-4px); }
+  80%       { transform: translateX(4px); }
+}
+
+.shake {
+  animation: shake 0.3s ease-in-out;
+}
+
+@keyframes float-message {
+  0%   { opacity: 0; transform: translateY(0) scale(0.8); }
+  20%  { opacity: 1; transform: translateY(-12px) scale(1.05); }
+  80%  { opacity: 1; transform: translateY(-20px) scale(1); }
+  100% { opacity: 0; transform: translateY(-32px) scale(0.9); }
+}
+
+/* Floating encouragement message */
+.practice-message {
+  position: fixed;
+  top: 40%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-heading);
+  font-size: var(--text-2xl);
+  font-weight: var(--font-black);
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius-full);
+  pointer-events: none;
+  z-index: var(--z-toast);
+  animation: float-message 1.5s ease-in-out forwards;
+  white-space: nowrap;
+  box-shadow: var(--shadow-lg);
+}
+
+.practice-message--correct {
+  background-color: var(--color-accent-green);
+  color: var(--color-text-on-accent);
+}
+
+.practice-message--wrong {
+  background-color: var(--color-secondary);
+  color: var(--color-text-primary);
+}
+
+/* Real-time accuracy counter */
+.practice-accuracy-badge {
+  position: fixed;
+  top: var(--space-4);
+  right: var(--space-4);
+  background-color: var(--color-accent-blue);
+  color: var(--color-text-on-accent);
+  font-family: var(--font-heading);
+  font-size: var(--text-xl);
+  font-weight: var(--font-black);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-md);
+  z-index: var(--z-raised);
+  min-width: 80px;
+  text-align: center;
+  transition: background-color var(--transition-normal);
+}
+
+.practice-accuracy-badge--high {
+  background-color: var(--color-accent-green);
+}
+
+.practice-accuracy-badge--mid {
+  background-color: var(--color-accent-orange);
+}
+
+.practice-accuracy-badge--low {
+  background-color: var(--color-error);
+}
+
 @keyframes bounce-in {
   0%   { transform: scale(0.5); opacity: 0; }
   70%  { transform: scale(1.1); opacity: 1; }
@@ -408,6 +486,7 @@ input, textarea, select {
    ----------------------------------------------------------------------------- */
 /* Mobile-first. Breakpoints: sm=480, md=768, lg=1024 */
 
+/* Mobile (< 480px) */
 @media (max-width: 480px) {
   h1 { font-size: var(--text-3xl); }
   h2 { font-size: var(--text-2xl); }
@@ -415,6 +494,22 @@ input, textarea, select {
   .btn-xl {
     font-size: var(--text-xl);
     padding: var(--space-5) var(--space-7);
+  }
+
+  /* Ensure all buttons are at least 44px tall for touch targets */
+  .btn,
+  .btn-sm,
+  .btn-lg,
+  .btn-xl,
+  .mode-btn,
+  .song-card,
+  .stop-btn,
+  .back-btn,
+  .action-btn,
+  .upload-btn,
+  .upload-audio-btn,
+  .record-btn {
+    min-height: 44px;
   }
 
   .grid-2,
@@ -425,6 +520,52 @@ input, textarea, select {
   .container,
   .container-narrow {
     padding-inline: var(--space-4);
+  }
+
+  /* Stack buttons vertically on mobile */
+  .practice__header,
+  .report__actions,
+  .home__mode-grid {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  /* Shrink canvases on mobile */
+  .waterfall-canvas {
+    max-width: 100%;
+    height: auto;
+    aspect-ratio: 8 / 3;
+  }
+
+  .piano-canvas {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* Floating accuracy badge repositioned for mobile */
+  .practice-accuracy-badge {
+    top: auto;
+    bottom: var(--space-4);
+    right: var(--space-4);
+    font-size: var(--text-lg);
+  }
+}
+
+/* Tablet (768px+) */
+@media (min-width: 768px) {
+  /* Ensure touch targets on tablet too */
+  .btn,
+  .mode-btn,
+  .song-card,
+  .stop-btn,
+  .back-btn,
+  .action-btn {
+    min-height: 44px;
+  }
+
+  /* Waterfall canvas adapts to tablet width */
+  .waterfall-canvas {
+    max-width: 100%;
   }
 }
 

@@ -39,6 +39,10 @@ const session = {
   // Upload mode resources
   mediaRecorder: null,
   recordedChunks: [],
+  // UX state
+  streakCount: 0,
+  accuracyBadge: null,
+  practiceContainer: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -81,6 +85,99 @@ function el(tag, opts = {}) {
   if (opts.textContent !== undefined) node.textContent = opts.textContent;
   if (opts.id) node.id = opts.id;
   return node;
+}
+
+// ---------------------------------------------------------------------------
+// UX helpers: shake, floating messages, accuracy badge
+// ---------------------------------------------------------------------------
+
+const CORRECT_MESSAGES = ['太棒了！', '繼續加油！', '好厲害！', '完美！', '超強的！'];
+const WRONG_MESSAGES = ['沒關係，再試試！', '加油！', '再來一次！', '你做得到的！'];
+
+/**
+ * Show a floating encouragement message on screen.
+ * @param {'correct'|'wrong'} type
+ */
+function showFeedbackMessage(type) {
+  const messages = type === 'correct' ? CORRECT_MESSAGES : WRONG_MESSAGES;
+  const text = messages[Math.floor(Math.random() * messages.length)];
+
+  const msg = el('div', {
+    className: `practice-message practice-message--${type}`,
+    textContent: text,
+  });
+  document.body.appendChild(msg);
+
+  // Remove after animation completes
+  msg.addEventListener('animationend', () => {
+    if (msg.parentNode) {
+      msg.parentNode.removeChild(msg);
+    }
+  });
+}
+
+/**
+ * Shake the practice container to signal a wrong note.
+ * @param {HTMLElement} container
+ */
+function triggerShake(container) {
+  if (!container) return;
+  container.classList.remove('shake');
+  // Force reflow so the animation restarts if already applied
+  void container.offsetWidth;
+  container.classList.add('shake');
+  container.addEventListener(
+    'animationend',
+    () => container.classList.remove('shake'),
+    { once: true },
+  );
+}
+
+/**
+ * Create and attach the floating accuracy badge (fixed position overlay).
+ * Returns the badge element.
+ * @returns {HTMLElement}
+ */
+function createAccuracyBadge() {
+  const badge = el('div', {
+    className: 'practice-accuracy-badge',
+    textContent: '--',
+  });
+  badge.setAttribute('aria-label', '即時準確率');
+  document.body.appendChild(badge);
+  return badge;
+}
+
+/**
+ * Update the accuracy badge text and colour class.
+ * @param {HTMLElement} badge
+ * @param {number} pct - 0 to 100
+ */
+function updateAccuracyBadge(badge, pct) {
+  if (!badge) return;
+  badge.textContent = `${pct}%`;
+  badge.classList.remove(
+    'practice-accuracy-badge--high',
+    'practice-accuracy-badge--mid',
+    'practice-accuracy-badge--low',
+  );
+  if (pct >= 80) {
+    badge.classList.add('practice-accuracy-badge--high');
+  } else if (pct >= 50) {
+    badge.classList.add('practice-accuracy-badge--mid');
+  } else {
+    badge.classList.add('practice-accuracy-badge--low');
+  }
+}
+
+/**
+ * Remove the floating accuracy badge from the DOM.
+ */
+function removeAccuracyBadge() {
+  if (session.accuracyBadge && session.accuracyBadge.parentNode) {
+    session.accuracyBadge.parentNode.removeChild(session.accuracyBadge);
+  }
+  session.accuracyBadge = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -371,7 +468,18 @@ function startRecording(recordBtn, recordStatus, song, page, currentState) {
     })
     .catch((err) => {
       console.error('Microphone access failed:', err);
-      showUploadError(page, '無法存取麥克風，請確認權限設定。');
+      const isPermissionDenied =
+        err.name === 'NotAllowedError' ||
+        err.name === 'PermissionDeniedError' ||
+        (err.message && err.message.toLowerCase().includes('permission'));
+      if (isPermissionDenied) {
+        showUploadError(
+          page,
+          '需要麥克風權限才能偵測你的演奏喔！請在瀏覽器中允許麥克風存取。',
+        );
+      } else {
+        showUploadError(page, '無法存取麥克風，請確認權限設定。');
+      }
     });
 }
 
@@ -464,13 +572,16 @@ function showUploadError(page, message) {
 function renderLivePractice(container, currentState, song) {
   const page = el('div', { className: 'page page--practice' });
 
+  // Store reference to practice container for shake effect
+  session.practiceContainer = page;
+
+  // Create floating accuracy badge
+  session.accuracyBadge = createAccuracyBadge();
+
   // Header bar
   const header = el('div', { className: 'practice__header' });
   const songTitle = el('h2', { className: 'practice__title', textContent: song.name });
   header.appendChild(songTitle);
-
-  const accuracyEl = el('span', { className: 'practice__accuracy', textContent: '準確率: --' });
-  header.appendChild(accuracyEl);
 
   const stopBtn = el('button', { className: 'stop-btn', textContent: '⏹ 停止' });
   header.appendChild(stopBtn);
@@ -504,26 +615,47 @@ function renderLivePractice(container, currentState, song) {
   const pCtx = pianoCanvas.getContext('2d');
 
   function onNoteDetected(playedNote) {
+    const prevResultCount = session.comparatorState.results.length;
     session.comparatorState = processPlayedNote(session.comparatorState, playedNote);
 
     // Update active notes for keyboard display
     const newMap = new Map(session.activeNotes);
-    // Find the last result for this midi to get status
     const results = session.comparatorState.results;
+    let lastStatus = null;
     for (let i = results.length - 1; i >= 0; i--) {
       if (results[i].played.midi === playedNote.midi) {
         newMap.set(playedNote.midi, results[i].status);
+        lastStatus = results[i].status;
         break;
       }
     }
     session.activeNotes = newMap;
 
-    // Update accuracy display
+    // UX feedback: shake + messages
+    const newResult = results.length > prevResultCount;
+    if (newResult && lastStatus !== null) {
+      if (lastStatus === 'correct') {
+        session.streakCount = (session.streakCount || 0) + 1;
+        if (session.streakCount >= 3) {
+          showFeedbackMessage('correct');
+          // Reset so next message appears after another 3-streak
+          if (session.streakCount % 3 === 0) {
+            // keep accumulating — message every 3 correct in a row
+          }
+        }
+      } else {
+        session.streakCount = 0;
+        triggerShake(session.practiceContainer);
+        showFeedbackMessage('wrong');
+      }
+    }
+
+    // Update real-time accuracy badge
     const total = session.comparatorState.results.length;
     const correct = session.comparatorState.results.filter(r => r.status === 'correct').length;
     if (total > 0) {
       const pct = Math.round((correct / total) * 100);
-      accuracyEl.textContent = `準確率: ${pct}%`;
+      updateAccuracyBadge(session.accuracyBadge, pct);
     }
 
     // Clear active note highlight after 500ms
@@ -568,8 +700,13 @@ function renderLivePractice(container, currentState, song) {
   }
 
   function endPractice(practiceState) {
+    // Capture comparator state before cleanup resets it
+    const finalComparatorState = session.comparatorState;
+    removeAccuracyBadge();
+    session.streakCount = 0;
+    session.practiceContainer = null;
     cleanupSession();
-    const report = createReport(session.comparatorState, practiceState.currentSong);
+    const report = createReport(finalComparatorState, practiceState.currentSong);
     navigate('report', { score: report });
   }
 
@@ -586,17 +723,42 @@ function renderLivePractice(container, currentState, song) {
       })
       .catch((err) => {
         console.error('Microphone init failed:', err);
-        showPracticeError(page, '無法存取麥克風，請確認權限設定。');
+        removeAccuracyBadge();
+        const isPermissionDenied =
+          err.name === 'NotAllowedError' ||
+          err.name === 'PermissionDeniedError' ||
+          (err.message && err.message.toLowerCase().includes('permission'));
+        if (isPermissionDenied) {
+          showPracticeError(
+            page,
+            '需要麥克風權限才能偵測你的演奏喔！請在瀏覽器中允許麥克風存取。',
+          );
+        } else {
+          showPracticeError(page, '無法存取麥克風，請確認權限設定。');
+        }
         session.rafId = null;
       });
   } else if (mode === 'midi') {
     startMidiPipeline(onNoteDetected)
-      .then(() => {
+      .then((result) => {
+        if (result.inputs.length === 0) {
+          removeAccuracyBadge();
+          showMidiNotFoundError(page);
+          session.rafId = null;
+          return;
+        }
         session.rafId = requestAnimationFrame(loop);
       })
       .catch((err) => {
         console.error('MIDI init failed:', err);
-        showPracticeError(page, '找不到 MIDI 裝置，請確認連接後重試。');
+        removeAccuracyBadge();
+        const isMidiNotSupported =
+          err.message && err.message.toLowerCase().includes('not supported');
+        if (isMidiNotSupported) {
+          showMidiBrowserError(page);
+        } else {
+          showMidiNotFoundError(page);
+        }
         session.rafId = null;
       });
   } else {
@@ -607,6 +769,48 @@ function renderLivePractice(container, currentState, song) {
 function showPracticeError(page, message) {
   const errEl = el('p', { className: 'practice__error', textContent: message });
   page.appendChild(errEl);
+}
+
+/**
+ * Show a friendly "no MIDI device found" error with a button to switch to mic mode.
+ * @param {HTMLElement} page
+ */
+function showMidiNotFoundError(page) {
+  const errEl = el('p', {
+    className: 'practice__error',
+    textContent: '找不到 MIDI 鍵盤，要不要試試麥克風模式？',
+  });
+  page.appendChild(errEl);
+
+  const switchBtn = el('button', {
+    className: 'btn btn-secondary',
+    textContent: '切換到麥克風模式',
+  });
+  switchBtn.addEventListener('click', () => {
+    navigate('select', { mode: 'mic' });
+  });
+  page.appendChild(switchBtn);
+}
+
+/**
+ * Show a friendly "browser doesn't support MIDI" error.
+ * @param {HTMLElement} page
+ */
+function showMidiBrowserError(page) {
+  const errEl = el('p', {
+    className: 'practice__error',
+    textContent: '你的瀏覽器不支援 MIDI 鍵盤，請使用 Chrome 或試試麥克風模式。',
+  });
+  page.appendChild(errEl);
+
+  const switchBtn = el('button', {
+    className: 'btn btn-secondary',
+    textContent: '切換到麥克風模式',
+  });
+  switchBtn.addEventListener('click', () => {
+    navigate('select', { mode: 'mic' });
+  });
+  page.appendChild(switchBtn);
 }
 
 // ---------------------------------------------------------------------------
@@ -638,6 +842,9 @@ function cleanupSession() {
   }
   session.midiInputs = [];
   session.midiAccess = null;
+
+  // Remove floating accuracy badge if still present
+  removeAccuracyBadge();
 
   // Clean up upload/record session
   cleanupUploadSession();
