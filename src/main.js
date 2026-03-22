@@ -8,7 +8,7 @@
  */
 
 import { createAppState, updateState } from './app.js';
-import { initMicrophone, detectPitch, frequencyToMidi } from './audio/pitch-detector.js';
+import { initMicrophone, detectPitch, frequencyToMidi, processAudioFile } from './audio/pitch-detector.js';
 import { initMidi } from './audio/midi-input.js';
 import { parseMidiScore } from './score/midi-parser.js';
 import { getBuiltInSongs } from './score/built-in-songs.js';
@@ -36,6 +36,9 @@ const session = {
   comparatorState: null,
   song: null,
   activeNotes: new Map(), // midi → status
+  // Upload mode resources
+  mediaRecorder: null,
+  recordedChunks: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -253,6 +256,212 @@ function renderPractice(container, currentState) {
     return;
   }
 
+  if (currentState.mode === 'upload') {
+    renderUploadPractice(container, currentState, song);
+  } else {
+    renderLivePractice(container, currentState, song);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Practice: Upload / Record mode
+// ---------------------------------------------------------------------------
+
+function renderUploadPractice(container, currentState, song) {
+  const page = el('div', { className: 'page page--practice page--upload' });
+
+  // Header
+  const header = el('div', { className: 'practice__header' });
+  const songTitle = el('h2', { className: 'practice__title', textContent: song.name });
+  header.appendChild(songTitle);
+  page.appendChild(header);
+
+  // Instructions
+  const instructions = el('p', {
+    className: 'upload__instructions',
+    textContent: '上傳音頻檔案或錄製你的演奏，系統將自動分析並給出成績。',
+  });
+  page.appendChild(instructions);
+
+  // Upload button + hidden file input
+  const uploadBtn = el('button', { className: 'upload-audio-btn', textContent: '📂 上傳音頻檔案' });
+  const fileInput = el('input');
+  fileInput.type = 'file';
+  fileInput.accept = '.wav,.mp3,.m4a';
+  fileInput.style.display = 'none';
+
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    analyseAudioFile(file, song, page, currentState);
+  });
+
+  uploadBtn.addEventListener('click', () => fileInput.click());
+
+  page.appendChild(uploadBtn);
+  page.appendChild(fileInput);
+
+  // Divider
+  const divider = el('p', { className: 'upload__divider', textContent: '— 或者 —' });
+  page.appendChild(divider);
+
+  // Record button
+  const recordBtn = el('button', { className: 'record-btn', textContent: '🎙️ 開始錄音' });
+  const recordStatus = el('p', { className: 'record__status', textContent: '' });
+
+  let isRecording = false;
+
+  recordBtn.addEventListener('click', () => {
+    if (!isRecording) {
+      startRecording(recordBtn, recordStatus, song, page, currentState);
+      isRecording = true;
+    } else {
+      stopRecording(recordBtn, recordStatus);
+      isRecording = false;
+    }
+  });
+
+  page.appendChild(recordBtn);
+  page.appendChild(recordStatus);
+
+  // Back button
+  const backBtn = el('button', { className: 'back-btn', textContent: '← 返回選歌' });
+  backBtn.addEventListener('click', () => {
+    cleanupUploadSession();
+    navigate('select', {});
+  });
+  page.appendChild(backBtn);
+
+  container.appendChild(page);
+}
+
+/**
+ * Start recording via MediaRecorder API.
+ * When recording stops, automatically analyse the recorded audio.
+ */
+function startRecording(recordBtn, recordStatus, song, page, currentState) {
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    .then((stream) => {
+      session.stream = stream;
+      session.recordedChunks = [];
+
+      const recorder = new MediaRecorder(stream);
+      session.mediaRecorder = recorder;
+
+      recorder.addEventListener('dataavailable', (e) => {
+        if (e.data && e.data.size > 0) {
+          session.recordedChunks = [...session.recordedChunks, e.data];
+        }
+      });
+
+      recorder.addEventListener('stop', () => {
+        if (session.recordedChunks.length === 0) {
+          showUploadError(page, '錄音為空，請重試。');
+          return;
+        }
+        const blob = new Blob(session.recordedChunks, { type: 'audio/webm' });
+        const file = new File([blob], 'recording.webm', { type: 'audio/webm' });
+        cleanupUploadSession();
+        analyseAudioFile(file, song, page, currentState);
+      });
+
+      recorder.start();
+      recordBtn.textContent = '⏹ 停止錄音';
+      recordStatus.textContent = '錄音中…';
+    })
+    .catch((err) => {
+      console.error('Microphone access failed:', err);
+      showUploadError(page, '無法存取麥克風，請確認權限設定。');
+    });
+}
+
+/**
+ * Stop the active MediaRecorder, which will trigger the 'stop' event.
+ */
+function stopRecording(recordBtn, recordStatus) {
+  if (session.mediaRecorder && session.mediaRecorder.state !== 'inactive') {
+    session.mediaRecorder.stop();
+    recordBtn.textContent = '🎙️ 開始錄音';
+    recordStatus.textContent = '處理中…';
+  }
+}
+
+/**
+ * Clean up MediaRecorder and mic stream.
+ */
+function cleanupUploadSession() {
+  if (session.mediaRecorder && session.mediaRecorder.state !== 'inactive') {
+    session.mediaRecorder.stop();
+  }
+  session.mediaRecorder = null;
+  session.recordedChunks = [];
+
+  if (session.stream) {
+    session.stream.getTracks().forEach((track) => track.stop());
+    session.stream = null;
+  }
+}
+
+/**
+ * Decode and analyse an audio file, then navigate to the report page.
+ *
+ * @param {File} file
+ * @param {{ notes: object[], name: string }} song
+ * @param {HTMLElement} page - Parent element for error messages
+ * @param {object} currentState
+ */
+async function analyseAudioFile(file, song, page, currentState) {
+  const statusEl = el('p', { className: 'upload__progress', textContent: '🔍 分析中，請稍候…' });
+  page.appendChild(statusEl);
+
+  try {
+    const pitches = await processAudioFile(file);
+
+    if (pitches.length === 0) {
+      page.removeChild(statusEl);
+      showUploadError(page, '未偵測到音符，請確認音頻內容是否正確。');
+      return;
+    }
+
+    // Convert pitch results to played notes (filter silence)
+    const playedNotes = pitches
+      .filter((p) => p.frequency > 0)
+      .map((p) => ({ midi: frequencyToMidi(p.frequency), time: p.time }))
+      .filter((n) => n.midi >= 0 && n.midi <= 127);
+
+    if (playedNotes.length === 0) {
+      page.removeChild(statusEl);
+      showUploadError(page, '未偵測到有效音符，請確認錄音品質。');
+      return;
+    }
+
+    // Run all notes through the comparator
+    let comparatorState = createComparatorState(song.notes);
+    for (const note of playedNotes) {
+      comparatorState = processPlayedNote(comparatorState, note);
+    }
+
+    const report = createReport(comparatorState, currentState.currentSong);
+    navigate('report', { score: report });
+  } catch (err) {
+    console.error('Audio analysis failed:', err);
+    if (page.contains(statusEl)) {
+      page.removeChild(statusEl);
+    }
+    showUploadError(page, '音頻解析失敗，請確認檔案格式是否正確（支援 .wav、.mp3、.m4a）。');
+  }
+}
+
+function showUploadError(page, message) {
+  const errEl = el('p', { className: 'upload__error', textContent: message });
+  page.appendChild(errEl);
+}
+
+// ---------------------------------------------------------------------------
+// Practice: Live (mic / midi) mode
+// ---------------------------------------------------------------------------
+
+function renderLivePractice(container, currentState, song) {
   const page = el('div', { className: 'page page--practice' });
 
   // Header bar
@@ -391,7 +600,6 @@ function renderPractice(container, currentState) {
         session.rafId = null;
       });
   } else {
-    // upload mode: just show the waterfall without live input
     session.rafId = requestAnimationFrame(loop);
   }
 }
@@ -430,6 +638,9 @@ function cleanupSession() {
   }
   session.midiInputs = [];
   session.midiAccess = null;
+
+  // Clean up upload/record session
+  cleanupUploadSession();
 }
 
 // ---------------------------------------------------------------------------
